@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- MD Search to Selection - core (no Navisworks refs). Author: MD (Mayank Dholariya) -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <AssemblyName>SearchToSelection.Core</AssemblyName>
+    <RootNamespace>SearchToSelection.Core</RootNamespace>
+    <Version>1.0.0</Version>
+    <Authors>MD (Mayank Dholariya)</Authors>
+    <Company>MD (Mayank Dholariya)</Company>
+    <Product>MD Search to Selection</Product>
+    <Copyright>Copyright (c) 2026 MD (Mayank Dholariya)</Copyright>
+    <Deterministic>true</Deterministic>
+    <NuGetAudit>false</NuGetAudit>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+</Project>

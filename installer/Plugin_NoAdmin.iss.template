@@ -1,0 +1,269 @@
+﻿; MD no-admin (per-user) Inno Setup 6 template. Author: MD (Mayank Dholariya)
+; Double-underscore tokens are filled by installer/make_release.py. Do not edit [Code] unless you know why.
+#define AppName "__APP__"
+#define AppVer "__VER__"
+#define Author "MD (Mayank Dholariya)"
+#define MinYear 2017
+#define MaxYear 2027
+
+[Setup]
+AppId={{__APPID__}
+AppName={#AppName}
+AppVersion={#AppVer}
+AppVerName={#AppName} v{#AppVer} (no admin)
+AppPublisher={#Author}
+AppCopyright=Copyright (c) 2026 {#Author}
+VersionInfoVersion=__VER__.0
+VersionInfoCompany={#Author}
+VersionInfoDescription={#AppName} no-admin Setup - {#Author}
+VersionInfoProductName={#AppName}
+PrivilegesRequired=lowest
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+MinVersion=6.1sp1
+DisableDirPage=yes
+DisableProgramGroupPage=yes
+OutputDir=__REL__
+OutputBaseFilename=__SETUP__
+Compression=lzma2/max
+SolidCompression=yes
+WizardStyle=modern
+SetupIconFile=__ICON__
+WizardImageFile=__WIZL__
+WizardSmallImageFile=__WIZS__
+SetupMutex=__NAME__UserSetupMutex
+CloseApplications=no
+SetupLogging=yes
+DefaultDirName={userappdata}\Autodesk\ApplicationPlugins\__BUNDLE__
+UninstallDisplayName={#AppName} v{#AppVer} (no admin) - {#Author}
+UninstallDisplayIcon={app}\Contents\__NAME__.ico
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+WelcomeLabel2=This will install [name/ver] for your Windows user only.%n%nNo administrator rights are needed, now or for future updates.%n%nAuthor: {#Author}%n%nPlease close Navisworks before continuing.
+
+[Files]
+Source: "__STAGE__\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\Contents"
+Type: files; Name: "{app}\PackageContents.xml"
+Type: dirifempty; Name: "{app}"
+
+[Code]
+// Shared [Code] for MD no-admin (per-user) Navisworks plugin installers.
+// Installs to %APPDATA%\Autodesk\ApplicationPlugins\MD.<Plugin>.bundle (no admin, no Program Files, no HKLM writes).
+// Reads only: Program Files / HKLM (to find Navisworks and old admin copies).
+
+const
+  UninstKey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall';
+
+var
+  PlugName, PlugApp, PlugLegacy: array of String;
+  Detected, Conflicts, Leftovers: String;
+  NwDirs: TArrayOfString;
+
+procedure AddPlug(const N, A, L: String);
+var
+  K: Integer;
+begin
+  K := GetArrayLength(PlugName);
+  SetArrayLength(PlugName, K + 1);
+  SetArrayLength(PlugApp, K + 1);
+  SetArrayLength(PlugLegacy, K + 1);
+  PlugName[K] := N;
+  PlugApp[K] := A;
+  PlugLegacy[K] := L;
+end;
+
+function IsNavisworksRunning(): Boolean;
+var
+  Locator, Service, Procs: Variant;
+begin
+  Result := False;
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Service := Locator.ConnectServer('.', 'root\CIMV2');
+    Procs := Service.ExecQuery('SELECT ProcessId FROM Win32_Process WHERE Name = ''Roamer.exe''');
+    Result := Procs.Count > 0;
+  except
+    Result := False;
+  end;
+end;
+
+function RunningSilently(): Boolean;
+begin
+  if IsUninstaller() then
+    Result := UninstallSilent()
+  else
+    Result := WizardSilent();
+end;
+
+function WaitForNavisworksClosed(): Boolean;
+begin
+  Result := True;
+  while IsNavisworksRunning() do
+  begin
+    if RunningSilently() then
+    begin
+      Result := False;
+      Exit;
+    end;
+    if MsgBox('Navisworks is running, so its plugin files are locked.' #13#10#13#10 +
+              'Please close every Navisworks window, then click Retry.',
+              mbError, MB_RETRYCANCEL) <> IDRETRY then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+end;
+
+procedure AddNwDir(Dir, Hint: String);
+var
+  I, N: Integer;
+  Ed: String;
+begin
+  Dir := RemoveBackslashUnlessRoot(Trim(RemoveQuotes(Dir)));
+  if Dir = '' then Exit;
+  if not FileExists(AddBackslash(Dir) + 'Roamer.exe') then Exit;
+  if Pos('freedom', Lowercase(Dir + ' ' + Hint)) > 0 then Exit;
+  for I := 0 to GetArrayLength(NwDirs) - 1 do
+    if CompareText(NwDirs[I], Dir) = 0 then Exit;
+  N := GetArrayLength(NwDirs);
+  SetArrayLength(NwDirs, N + 1);
+  NwDirs[N] := Dir;
+  if Pos('simulate', Lowercase(Dir + ' ' + Hint)) > 0 then Ed := 'Simulate' else Ed := 'Manage';
+  Detected := Detected + '  Navisworks ' + Ed + '  (' + Dir + ')' + #13#10;
+end;
+
+procedure ScanUninstallKeys(RootKey: Integer);
+var
+  Names: TArrayOfString;
+  I: Integer;
+  Key, DisplayName, Location: String;
+begin
+  if not RegGetSubkeyNames(RootKey, UninstKey, Names) then Exit;
+  for I := 0 to GetArrayLength(Names) - 1 do
+  begin
+    Key := UninstKey + '\' + Names[I];
+    if RegQueryStringValue(RootKey, Key, 'DisplayName', DisplayName) then
+      if (Pos('navisworks manage', Lowercase(DisplayName)) > 0) or
+         (Pos('navisworks simulate', Lowercase(DisplayName)) > 0) then
+        if RegQueryStringValue(RootKey, Key, 'InstallLocation', Location) then
+          AddNwDir(Location, DisplayName);
+  end;
+end;
+
+procedure CheckConflict(const D: String);
+begin
+  if DirExists(D) then
+    if Pos(Lowercase(D), Lowercase(Conflicts)) = 0 then
+      Conflicts := Conflicts + '  ' + D + #13#10;
+end;
+
+procedure ScanAll();
+var
+  Year, I, J: Integer;
+  Base, Ed, AppData: String;
+begin
+  Detected := '';
+  Conflicts := '';
+  Leftovers := '';
+  SetArrayLength(NwDirs, 0);
+  Base := ExpandConstant('{commonpf64}') + '\Autodesk\';
+  for Year := 2014 to 2040 do
+  begin
+    AddNwDir(Base + 'Navisworks Manage ' + IntToStr(Year), 'Manage');
+    AddNwDir(Base + 'Navisworks Simulate ' + IntToStr(Year), 'Simulate');
+  end;
+  ScanUninstallKeys(HKLM64);
+  ScanUninstallKeys(HKLM32);
+
+  AppData := ExpandConstant('{userappdata}');
+  for J := 0 to GetArrayLength(PlugName) - 1 do
+  begin
+    // Old admin copies inside Navisworks\Plugins (these WOULD load a second copy)
+    for I := 0 to GetArrayLength(NwDirs) - 1 do
+    begin
+      CheckConflict(NwDirs[I] + '\Plugins\' + PlugName[J]);
+      if PlugLegacy[J] <> '' then
+        CheckConflict(NwDirs[I] + '\Plugins\' + PlugLegacy[J]);
+    end;
+    // Per-user profile plugin folder (old style) and all-users bundle
+    for Year := 2017 to 2040 do
+    begin
+      CheckConflict(AppData + '\Autodesk Navisworks Manage ' + IntToStr(Year) + '\Plugins\' + PlugName[J]);
+      CheckConflict(AppData + '\Autodesk Navisworks Simulate ' + IntToStr(Year) + '\Plugins\' + PlugName[J]);
+    end;
+    CheckConflict(ExpandConstant('{commonappdata}') + '\Autodesk\ApplicationPlugins\MD.' + PlugName[J] + '.bundle');
+    // Old admin setup folder (does not load in Navisworks, only an entry in Apps)
+    if DirExists(ExpandConstant('{commonpf64}') + '\' + PlugApp[J]) then
+      Leftovers := Leftovers + '  ' + ExpandConstant('{commonpf64}') + '\' + PlugApp[J] + #13#10;
+  end;
+end;
+
+
+procedure InitPlugs();
+begin
+  AddPlug('__NAME__', '__APP__', '');
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  Result := False;
+  InitPlugs();
+  ScanAll();
+  if not WaitForNavisworksClosed() then Exit;
+  if Detected = '' then
+    SuppressibleMsgBox('No Navisworks Manage or Simulate was found on this PC.' #13#10#13#10 +
+      'You can still install. The plugin is placed in your own profile and Navisworks ' +
+      '{#MinYear}-{#MaxYear} picks it up automatically once it is installed.', mbInformation, MB_OK, IDOK);
+  Result := True;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID = wpReady then
+    Result := WaitForNavisworksClosed();
+end;
+
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo,
+  MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+begin
+  Result := 'No administrator rights needed. Installs for this Windows user only into:' + NewLine +
+            Space + ExpandConstant('{userappdata}') + '\Autodesk\ApplicationPlugins\' + NewLine + NewLine;
+  if MemoComponentsInfo <> '' then
+    Result := Result + MemoComponentsInfo + NewLine + NewLine;
+  if Detected <> '' then
+    Result := Result + 'Navisworks found (the matching 2017-2027 version loads automatically):' + NewLine + Detected
+  else
+    Result := Result + 'Navisworks: none found yet.' + NewLine;
+  if Conflicts <> '' then
+    Result := Result + NewLine + 'WARNING - older copies found. Navisworks may load the plugin twice:' + NewLine + Conflicts +
+      'Remove them once (needs admin): delete that folder, or uninstall the old version in Windows Settings > Apps.' + NewLine;
+  if Leftovers <> '' then
+    Result := Result + NewLine + 'Old admin setup folders (uninstall once from Settings > Apps):' + NewLine + Leftovers;
+  Result := Result + NewLine + 'Author: {#Author}';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssDone then
+    if Conflicts <> '' then
+      SuppressibleMsgBox('Installed for your user.' #13#10#13#10 +
+        'But an older copy was found here:' #13#10 + Conflicts + #13#10 +
+        'Navisworks may load the plugin twice (two buttons, or a "plugin already loaded" error).' #13#10 +
+        'Remove the old copy ONE time with admin rights: uninstall the old version from Windows Settings > Apps, ' +
+        'or delete that folder.' #13#10#13#10 +
+        'After that, updates never need admin again.', mbInformation, MB_OK, IDOK);
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  InitPlugs();
+  Result := WaitForNavisworksClosed();
+end;
